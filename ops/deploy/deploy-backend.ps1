@@ -122,57 +122,95 @@ else {
 }
 Close-Section
 
-Write-Section 'Backend deploy: ensure NSSM is available'
+Write-Section 'Backend deploy: save runtime config for wrapper script'
+# The wrapper script reads these at startup
+Set-Content -Path (Join-Path $stateRoot 'repo_root.txt') -Value $repoRoot -NoNewline
+Set-Content -Path (Join-Path $stateRoot 'app_module.txt') -Value $appModule -NoNewline
+$wrapperScript = Join-Path $repoRoot 'ops/deploy/run-backend.ps1'
+Write-Host "Wrapper script: $wrapperScript"
+Write-Host "Repo root: $repoRoot"
+Write-Host "App module: $appModule"
+Close-Section
+
+# Clean up NSSM service if it exists from previous deploy approach
 $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-if (-not $nssmCmd) {
-  throw 'NSSM is required but was not found in PATH. Install it with: choco install nssm -y'
+if ($nssmCmd) {
+  $nssmStatus = nssm status AmbIskarnaBackend 2>&1
+  if ($nssmStatus -notmatch 'Can.t open service') {
+    Write-Section 'Backend deploy: removing legacy NSSM service'
+    nssm stop AmbIskarnaBackend 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    nssm remove AmbIskarnaBackend confirm 2>&1 | Out-Null
+    Write-Host 'Removed legacy NSSM service AmbIskarnaBackend'
+    Close-Section
+  }
 }
-Write-Host "Using NSSM at $($nssmCmd.Source)"
-Close-Section
 
-$serviceName = 'AmbIskarnaBackend'
+$taskName = 'AmbIskarnaBackend'
 
-Write-Section 'Backend deploy: configure NSSM service'
-$serviceExists = (nssm status $serviceName 2>&1) -notmatch 'Can.t open service'
+Write-Section 'Backend deploy: stop existing task if running'
+# Kill any existing backend process
+if (Test-Path $pidFile) {
+  $existingPid = (Get-Content $pidFile -Raw).Trim()
+  if ($existingPid) {
+    Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
+    Write-Host "Stopped process $existingPid"
+  }
+  Remove-Item $pidFile -Force
+}
 
-if ($serviceExists) {
-  Write-Host "Stopping existing service $serviceName"
-  nssm stop $serviceName 2>&1 | Out-Null
+# Stop the wrapper process tree via the scheduled task
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+  Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
-  Write-Host "Removing existing service $serviceName"
-  nssm remove $serviceName confirm 2>&1 | Out-Null
-  Start-Sleep -Seconds 1
+  # Kill any lingering python processes from the wrapper
+  Get-Process python -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $venvPython } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+  Write-Host "Removed existing task: $taskName"
 }
-
-Write-Host "Installing service $serviceName"
-nssm install $serviceName $venvPython
-nssm set $serviceName AppParameters "-m uvicorn $appModule --host 0.0.0.0 --port 8765"
-nssm set $serviceName AppDirectory $repoRoot
-nssm set $serviceName DisplayName 'Amb-Iskarna Backend'
-nssm set $serviceName Description 'FastAPI backend for Amb-Iskarna ambient light controller'
-nssm set $serviceName Start SERVICE_AUTO_START
-
-#NSSM service configuration
-# Restart on failure with 5s delay
-nssm set $serviceName AppExit Default Restart
-nssm set $serviceName AppRestartDelay 5000
-
-# Log rotation
-nssm set $serviceName AppStdout $stdoutLog
-nssm set $serviceName AppStderr $stderrLog
-nssm set $serviceName AppStdoutCreationDisposition 4
-nssm set $serviceName AppStderrCreationDisposition 4
-nssm set $serviceName AppRotateFiles 1
-nssm set $serviceName AppRotateOnline 1
-nssm set $serviceName AppRotateBytes 1048576
-
 Close-Section
 
-Write-Section 'Backend deploy: start service'
-nssm start $serviceName
-Start-Sleep -Seconds 2
-$svcStatus = nssm status $serviceName
-Write-Host "Service status: $svcStatus"
+Write-Section 'Backend deploy: register scheduled task'
+$pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
+if (-not $pwshPath) { $pwshPath = 'powershell.exe' }
+
+$action = New-ScheduledTaskAction `
+  -Execute $pwshPath `
+  -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`"" `
+  -WorkingDirectory $repoRoot
+
+$trigger = New-ScheduledTaskTrigger -AtLogon
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -ExecutionTimeLimit (New-TimeSpan -Days 0)
+
+Register-ScheduledTask `
+  -TaskName $taskName `
+  -Action $action `
+  -Trigger $trigger `
+  -Principal $principal `
+  -Settings $settings `
+  -Description 'Amb-Iskarna backend (uvicorn with auto-restart)' `
+  -Force | Out-Null
+
+Write-Host "Registered task: $taskName"
+Write-Host "  Runs as: $env:USERNAME (interactive session)"
+Write-Host "  Trigger: at logon"
+Write-Host "  Script: $wrapperScript"
+Close-Section
+
+Write-Section 'Backend deploy: start task now'
+Start-ScheduledTask -TaskName $taskName
+Start-Sleep -Seconds 3
+$taskInfo = Get-ScheduledTask -TaskName $taskName
+Write-Host "Task state: $($taskInfo.State)"
 Close-Section
 
 Write-Section 'Backend deploy: health check'
@@ -204,11 +242,11 @@ Close-Section
 
 Add-Summary '# Backend deployment'
 Add-Summary ''
-Add-Summary "- Service name: $serviceName"
-Add-Summary "- Backend directory: $($backendDir.Replace($repoRoot + '\\', ''))"
+Add-Summary "- Task name: $taskName"
+Add-Summary "- Runs as: $env:USERNAME (interactive desktop session)"
+Add-Summary "- Backend directory: $($backendDir.Replace($repoRoot + '\', ''))"
 Add-Summary "- FastAPI module: $appModule"
 Add-Summary "- Health check: $healthUrl"
-Add-Summary "- stdout log: $stdoutLog"
-Add-Summary "- stderr log: $stderrLog"
+Add-Summary "- Wrapper script: $wrapperScript"
 
 Write-Host '::notice::Backend deployment completed successfully.'
