@@ -63,6 +63,51 @@ Write-Host "Logs root: $logsRoot"
 Write-Host "FastAPI app module: $appModule"
 Close-Section
 
+$venvPython = Join-Path $venvRoot 'Scripts/python.exe'
+$taskName = 'AmbIskarnaBackend'
+
+Write-Section 'Backend deploy: stop running backend processes'
+# Clean up NSSM service if it exists from previous deploy approach
+$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+if ($nssmCmd) {
+  $nssmStatus = nssm status AmbIskarnaBackend 2>&1
+  if ($nssmStatus -notmatch 'Can.t open service') {
+    Write-Host 'Stopping and removing legacy NSSM service...'
+    nssm stop AmbIskarnaBackend 2>&1 | Out-Null
+    Start-Sleep -Seconds 3
+    nssm remove AmbIskarnaBackend confirm 2>&1 | Out-Null
+    Write-Host 'Removed NSSM service AmbIskarnaBackend'
+  }
+}
+
+# Kill any existing backend process via PID file
+if (Test-Path $pidFile) {
+  $existingPid = (Get-Content $pidFile -Raw).Trim()
+  if ($existingPid) {
+    Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
+    Write-Host "Stopped process $existingPid"
+  }
+  Remove-Item $pidFile -Force
+}
+
+# Stop the scheduled task if it exists
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+  Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+  Write-Host "Removed existing task: $taskName"
+}
+
+# Kill any lingering python processes from the venv
+if (Test-Path $venvPython) {
+  Get-Process python -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $venvPython } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+}
+Close-Section
+
 Write-Section 'Backend deploy: create or reuse Python virtual environment'
 
 $pyCmd = $null
@@ -130,47 +175,6 @@ $wrapperScript = Join-Path $repoRoot 'ops/deploy/run-backend.ps1'
 Write-Host "Wrapper script: $wrapperScript"
 Write-Host "Repo root: $repoRoot"
 Write-Host "App module: $appModule"
-Close-Section
-
-# Clean up NSSM service if it exists from previous deploy approach
-$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-if ($nssmCmd) {
-  $nssmStatus = nssm status AmbIskarnaBackend 2>&1
-  if ($nssmStatus -notmatch 'Can.t open service') {
-    Write-Section 'Backend deploy: removing legacy NSSM service'
-    nssm stop AmbIskarnaBackend 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
-    nssm remove AmbIskarnaBackend confirm 2>&1 | Out-Null
-    Write-Host 'Removed legacy NSSM service AmbIskarnaBackend'
-    Close-Section
-  }
-}
-
-$taskName = 'AmbIskarnaBackend'
-
-Write-Section 'Backend deploy: stop existing task if running'
-# Kill any existing backend process
-if (Test-Path $pidFile) {
-  $existingPid = (Get-Content $pidFile -Raw).Trim()
-  if ($existingPid) {
-    Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
-    Write-Host "Stopped process $existingPid"
-  }
-  Remove-Item $pidFile -Force
-}
-
-# Stop the wrapper process tree via the scheduled task
-$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existingTask) {
-  Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
-  # Kill any lingering python processes from the wrapper
-  Get-Process python -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -eq $venvPython } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-  Write-Host "Removed existing task: $taskName"
-}
 Close-Section
 
 Write-Section 'Backend deploy: register scheduled task'
