@@ -1,2 +1,30 @@
 AGENTS.md
 amb-iskarna-plan.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment secrets
+.env
+apps/backend/.env
+
+# Node / Frontend
+node_modules/
+apps/frontend/dist/
+apps/frontend/.vite/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
