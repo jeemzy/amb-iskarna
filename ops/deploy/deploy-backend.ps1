@@ -152,6 +152,7 @@ nssm set $serviceName DisplayName 'Amb-Iskarna Backend'
 nssm set $serviceName Description 'FastAPI backend for Amb-Iskarna ambient light controller'
 nssm set $serviceName Start SERVICE_AUTO_START
 
+#NSSM service configuration
 # Restart on failure with 5s delay
 nssm set $serviceName AppExit Default Restart
 nssm set $serviceName AppRestartDelay 5000
