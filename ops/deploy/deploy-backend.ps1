@@ -97,7 +97,7 @@ if (-not $pyCmd) {
     "$env:LOCALAPPDATA\Python\pythoncore-3.12-64\python.exe"
   )
   foreach ($candidate in $candidates) {
-    if (Test-Path $candidate) {
+    if (Test-Path $candidate -ErrorAction SilentlyContinue) {
       $pyCmd = $candidate
       Write-Host "Found Python at $candidate"
       break
