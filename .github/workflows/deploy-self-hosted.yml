@@ -1,0 +1,174 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  detect_changes:
+    name: Detect changed areas
+    runs-on: [self-hosted, windows, x64]
+    outputs:
+      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+      backend_changed: ${{ steps.detect.outputs.backend_changed }}
+      changed_files_json: ${{ steps.detect.outputs.changed_files_json }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed files and route deployment
+        id: detect
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host '::group::Resolve comparison range'
+          $before = '${{ github.event.before }}'
+          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq '0000000000000000000000000000000000000000') {
+            $parent = git rev-parse HEAD~1 2>$null
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($parent)) {
+              $before = $parent.Trim()
+            }
+            else {
+              $before = (git rev-list --max-parents=0 HEAD | Select-Object -First 1).Trim()
+            }
+          }
+          $after = (git rev-parse HEAD).Trim()
+          Write-Host "Base commit: $before"
+          Write-Host "Head commit: $after"
+          Write-Host '::endgroup::'
+
+          Write-Host '::group::Collect changed files'
+          $files = @(git diff --name-only $before $after | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          if ($files.Count -eq 0) {
+            Write-Host 'No changed files were detected.'
+          }
+          else {
+            $files | ForEach-Object { Write-Host "Changed: $_" }
+          }
+          Write-Host '::endgroup::'
+
+          $frontendChanged = $false
+          $backendChanged = $false
+
+          foreach ($file in $files) {
+            if ($file -match '^(apps/frontend/|ops/docker/|docker-compose\.frontend\.ya?ml$|\.github/workflows/deploy-self-hosted\.ya?ml$|ops/deploy/deploy-frontend\.ps1$)') {
+              $frontendChanged = $true
+            }
+            if ($file -match '^(apps/backend/|ops/deploy/deploy-backend\.ps1$|\.github/workflows/deploy-self-hosted\.ya?ml$)') {
+              $backendChanged = $true
+            }
+          }
+
+          $filesJson = if ($files.Count -eq 0) { '[]' } else { $files | ConvertTo-Json -Compress }
+
+          "frontend_changed=$($frontendChanged.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "backend_changed=$($backendChanged.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "changed_files_json=$filesJson" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# Deploy routing"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Frontend changed: $frontendChanged"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Backend changed: $backendChanged"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          if ($files.Count -gt 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Changed files"
+            foreach ($file in $files) {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- $file"
+            }
+          }
+          else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "No changed files were detected in the computed range."
+          }
+
+          if (-not $frontendChanged -and -not $backendChanged) {
+            Write-Host '::notice::No frontend or backend deployment work is required for this push.'
+          }
+          elseif ($frontendChanged -and $backendChanged) {
+            Write-Host '::notice::Both frontend and backend deployments will run.'
+          }
+          elseif ($frontendChanged) {
+            Write-Host '::notice::Frontend deployment will run.'
+          }
+          else {
+            Write-Host '::notice::Backend deployment will run.'
+          }
+
+  deploy_frontend:
+    name: Deploy frontend via remote Docker host
+    needs: detect_changes
+    if: needs.detect_changes.outputs.frontend_changed == 'true'
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy frontend container stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\ops\deploy\deploy-frontend.ps1
+
+  deploy_backend:
+    name: Deploy backend directly on Windows runner
+    needs: detect_changes
+    if: needs.detect_changes.outputs.backend_changed == 'true'
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Deploy backend process
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\ops\deploy\deploy-backend.ps1
+
+  deploy_result:
+    name: Publish final deployment summary
+    needs:
+      - detect_changes
+      - deploy_frontend
+      - deploy_backend
+    if: always()
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - name: Summarize deployment result
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $frontendRequired = '${{ needs.detect_changes.outputs.frontend_changed }}'
+          $backendRequired = '${{ needs.detect_changes.outputs.backend_changed }}'
+          $frontendResult = '${{ needs.deploy_frontend.result }}'
+          $backendResult = '${{ needs.deploy_backend.result }}'
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# Final deployment result"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Frontend required: $frontendRequired"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Frontend result: $frontendResult"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Backend required: $backendRequired"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Backend result: $backendResult"
+
+          if (($frontendRequired -eq 'true' -and $frontendResult -ne 'success') -or ($backendRequired -eq 'true' -and $backendResult -ne 'success')) {
+            Write-Host '::error::At least one required deployment job failed.'
+            exit 1
+          }
+
+          Write-Host '::notice::All required deployment work completed successfully.'
