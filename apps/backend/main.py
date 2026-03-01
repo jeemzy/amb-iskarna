@@ -38,3 +38,5 @@ app.add_middleware(
 
 # -- Routers ---------------------------------------------------------------
 app.include_router(api_router)
+
+logger.info("Amb-Iskarna backend ready")
