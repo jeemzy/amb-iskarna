@@ -84,17 +84,17 @@ if (-not $pyCmd) {
   throw 'Python was not found on the self-hosted runner.'
 }
 
-if (-not (Test-Path $venvRoot)) {
-  Write-Host "Creating virtual environment at $venvRoot"
-  if ($usePyLauncher) {
-    & $pyCmd -3.12 -m venv $venvRoot
-  }
-  else {
-    & $pyCmd -m venv $venvRoot
-  }
+if (Test-Path $venvRoot) {
+  Write-Host "Removing existing virtual environment at $venvRoot"
+  Remove-Item -Recurse -Force $venvRoot
+}
+
+Write-Host "Creating fresh virtual environment at $venvRoot"
+if ($usePyLauncher) {
+  & $pyCmd -3.12 -m venv $venvRoot
 }
 else {
-  Write-Host "Using existing virtual environment at $venvRoot"
+  & $pyCmd -m venv $venvRoot
 }
 
 $venvPython = Join-Path $venvRoot 'Scripts/python.exe'
