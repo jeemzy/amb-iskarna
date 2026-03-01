@@ -125,12 +125,7 @@ Close-Section
 Write-Section 'Backend deploy: ensure NSSM is available'
 $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
 if (-not $nssmCmd) {
-  Write-Host 'NSSM not found, installing via Chocolatey...'
-  choco install nssm -y --no-progress
-  $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-  if (-not $nssmCmd) {
-    throw 'Failed to install NSSM via Chocolatey.'
-  }
+  throw 'NSSM is required but was not found in PATH. Install it with: choco install nssm -y'
 }
 Write-Host "Using NSSM at $($nssmCmd.Source)"
 Close-Section
