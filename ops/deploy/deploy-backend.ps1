@@ -64,14 +64,45 @@ Write-Host "FastAPI app module: $appModule"
 Close-Section
 
 Write-Section 'Backend deploy: create or reuse Python virtual environment'
+
+# Try py launcher first, then fall back to well-known paths
+$pyCmd = $null
 $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
-if (-not $pyLauncher) {
-  throw 'The Windows py launcher is required on the self-hosted runner.'
+if ($pyLauncher) {
+  $pyCmd = 'py'
+  Write-Host "Found py launcher at $($pyLauncher.Source)"
+}
+else {
+  $candidates = @(
+    'C:\Windows\py.exe',
+    'C:\Python312\python.exe',
+    "$env:ProgramFiles\Python312\python.exe",
+    "${env:ProgramFiles(x86)}\Python312\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) {
+      $pyCmd = $candidate
+      Write-Host "Found Python at $candidate"
+      break
+    }
+  }
+}
+
+if (-not $pyCmd) {
+  Write-Host 'Searched for py launcher and common Python 3.12 install paths.'
+  Write-Host 'Ensure the py launcher is in the system-wide PATH or Python 3.12 is installed for all users.'
+  throw 'Python was not found on the self-hosted runner.'
 }
 
 if (-not (Test-Path $venvRoot)) {
   Write-Host "Creating virtual environment at $venvRoot"
-  & py -3.12 -m venv $venvRoot
+  if ($pyCmd -eq 'py') {
+    & py -3.12 -m venv $venvRoot
+  }
+  else {
+    & $pyCmd -m venv $venvRoot
+  }
 }
 else {
   Write-Host "Using existing virtual environment at $venvRoot"
