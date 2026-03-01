@@ -5,4 +5,4 @@ pydantic-settings>=2,<3
 python-dotenv>=1,<2
 websockets>=14,<15
 numpy>=2,<3
-dxcam>=0.4,<1
+dxcam>=0.0.5
