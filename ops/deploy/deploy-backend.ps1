@@ -122,36 +122,61 @@ else {
 }
 Close-Section
 
-Write-Section 'Backend deploy: stop current backend process if present'
-if (Test-Path $pidFile) {
-  $existingPid = (Get-Content $pidFile | Select-Object -First 1).Trim()
-  if (-not [string]::IsNullOrWhiteSpace($existingPid)) {
-    $existingProcess = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
-    if ($existingProcess) {
-      Write-Host "Stopping existing backend process PID $existingPid"
-      Stop-Process -Id $existingPid -Force
-      Start-Sleep -Seconds 2
-    }
-    else {
-      Write-Host "PID file existed but process $existingPid was not running."
-    }
+Write-Section 'Backend deploy: ensure NSSM is available'
+$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+if (-not $nssmCmd) {
+  Write-Host 'NSSM not found, installing via Chocolatey...'
+  choco install nssm -y --no-progress
+  $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+  if (-not $nssmCmd) {
+    throw 'Failed to install NSSM via Chocolatey.'
   }
 }
-else {
-  Write-Host 'No existing PID file was found.'
-}
+Write-Host "Using NSSM at $($nssmCmd.Source)"
 Close-Section
 
-Write-Section 'Backend deploy: start backend process'
-if (Test-Path $stdoutLog) { Remove-Item $stdoutLog -Force }
-if (Test-Path $stderrLog) { Remove-Item $stderrLog -Force }
+$serviceName = 'AmbIskarnaBackend'
 
-$arguments = @('-m', 'uvicorn', $appModule, '--host', '0.0.0.0', '--port', '8765')
-$process = Start-Process -FilePath $venvPython -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -WindowStyle Hidden -PassThru
-Set-Content -Path $pidFile -Value $process.Id -NoNewline
-Write-Host "Started backend PID $($process.Id)"
-Write-Host "stdout log: $stdoutLog"
-Write-Host "stderr log: $stderrLog"
+Write-Section 'Backend deploy: configure NSSM service'
+$serviceExists = (nssm status $serviceName 2>&1) -notmatch 'Can.t open service'
+
+if ($serviceExists) {
+  Write-Host "Stopping existing service $serviceName"
+  nssm stop $serviceName 2>&1 | Out-Null
+  Start-Sleep -Seconds 2
+  Write-Host "Removing existing service $serviceName"
+  nssm remove $serviceName confirm 2>&1 | Out-Null
+  Start-Sleep -Seconds 1
+}
+
+Write-Host "Installing service $serviceName"
+nssm install $serviceName $venvPython
+nssm set $serviceName AppParameters "-m uvicorn $appModule --host 0.0.0.0 --port 8765"
+nssm set $serviceName AppDirectory $repoRoot
+nssm set $serviceName DisplayName 'Amb-Iskarna Backend'
+nssm set $serviceName Description 'FastAPI backend for Amb-Iskarna ambient light controller'
+nssm set $serviceName Start SERVICE_AUTO_START
+
+# Restart on failure with 5s delay
+nssm set $serviceName AppExit Default Restart
+nssm set $serviceName AppRestartDelay 5000
+
+# Log rotation
+nssm set $serviceName AppStdout $stdoutLog
+nssm set $serviceName AppStderr $stderrLog
+nssm set $serviceName AppStdoutCreationDisposition 4
+nssm set $serviceName AppStderrCreationDisposition 4
+nssm set $serviceName AppRotateFiles 1
+nssm set $serviceName AppRotateOnline 1
+nssm set $serviceName AppRotateBytes 1048576
+
+Close-Section
+
+Write-Section 'Backend deploy: start service'
+nssm start $serviceName
+Start-Sleep -Seconds 2
+$svcStatus = nssm status $serviceName
+Write-Host "Service status: $svcStatus"
 Close-Section
 
 Write-Section 'Backend deploy: health check'
@@ -183,9 +208,9 @@ Close-Section
 
 Add-Summary '# Backend deployment'
 Add-Summary ''
+Add-Summary "- Service name: $serviceName"
 Add-Summary "- Backend directory: $($backendDir.Replace($repoRoot + '\\', ''))"
 Add-Summary "- FastAPI module: $appModule"
-Add-Summary "- PID file: $pidFile"
 Add-Summary "- Health check: $healthUrl"
 Add-Summary "- stdout log: $stdoutLog"
 Add-Summary "- stderr log: $stderrLog"
