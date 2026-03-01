@@ -183,7 +183,7 @@ if (-not $pwshPath) { $pwshPath = 'powershell.exe' }
 
 $action = New-ScheduledTaskAction `
   -Execute $pwshPath `
-  -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`"" `
+  -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`"" `
   -WorkingDirectory $repoRoot
 
 $trigger = New-ScheduledTaskTrigger -AtLogon
