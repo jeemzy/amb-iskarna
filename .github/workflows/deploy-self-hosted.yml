@@ -33,6 +33,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Handle ownership mismatch when runner service account changes
+          git config --global --add safe.directory '*'
+
           Write-Host '::group::Resolve comparison range'
           $before = '${{ github.event.before }}'
           if ([string]::IsNullOrWhiteSpace($before) -or $before -eq '0000000000000000000000000000000000000000') {
