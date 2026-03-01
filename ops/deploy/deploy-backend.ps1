@@ -65,18 +65,13 @@ Close-Section
 
 Write-Section 'Backend deploy: create or reuse Python virtual environment'
 
-# Discover a usable Python 3.12 interpreter.
-# The py.exe in WindowsApps is a per-user App Execution Alias that
-# does NOT work for service accounts like NetworkService, so we
-# explicitly skip WindowsApps hits and try multiple strategies.
-
 $pyCmd = $null
 $usePyLauncher = $false
 
-# Strategy 1: try py / python3 / python commands in PATH (skip WindowsApps aliases)
+# Try py / python3 / python from PATH
 foreach ($name in @('py', 'python3', 'python')) {
   $found = Get-Command $name -ErrorAction SilentlyContinue
-  if ($found -and $found.Source -notmatch 'WindowsApps') {
+  if ($found) {
     $pyCmd = $found.Source
     if ($name -eq 'py') { $usePyLauncher = $true }
     Write-Host "Found $name at $($found.Source)"
@@ -84,34 +79,8 @@ foreach ($name in @('py', 'python3', 'python')) {
   }
 }
 
-# Strategy 2: check well-known install paths
 if (-not $pyCmd) {
-  $candidates = @(
-    'C:\Windows\py.exe',
-    'C:\Python312\python.exe',
-    "$env:ProgramFiles\Python312\python.exe",
-    "${env:ProgramFiles(x86)}\Python312\python.exe",
-    "$env:ProgramFiles\iMA Menu\python312\python.exe",
-    'C:\Users\arthur\AppData\Local\Python\pythoncore-3.12-64\python.exe',
-    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-    "$env:LOCALAPPDATA\Python\pythoncore-3.12-64\python.exe"
-  )
-  foreach ($candidate in $candidates) {
-    if (Test-Path $candidate -ErrorAction SilentlyContinue) {
-      $pyCmd = $candidate
-      Write-Host "Found Python at $candidate"
-      break
-    }
-  }
-}
-
-if (-not $pyCmd) {
-  Write-Host '== Python discovery failed =='
-  Write-Host 'Tried commands: py, python3, python (excluding WindowsApps aliases)'
-  Write-Host 'Tried well-known paths: C:\Python312, ProgramFiles\Python312, iMA Menu\python312'
-  Write-Host ''
-  Write-Host 'Fix: install Python 3.12 for all users (not from Microsoft Store) so it is'
-  Write-Host 'available to the NetworkService account running the GitHub Actions runner.'
+  Write-Host 'Python was not found in PATH (tried: py, python3, python).'
   throw 'Python was not found on the self-hosted runner.'
 }
 
