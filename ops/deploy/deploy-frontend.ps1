@@ -19,7 +19,9 @@ if ([string]::IsNullOrWhiteSpace($repoRoot)) {
   $repoRoot = (Get-Location).Path
 }
 
-$dockerHost = 'tcp://192.168.88.130:2375'
+# Set DOCKER_HOST as env var so ALL docker subprocesses (including builders) use the remote host
+$env:DOCKER_HOST = 'tcp://192.168.88.130:2375'
+
 $candidates = @(
   'apps/frontend/docker-compose.yml',
   'apps/frontend/docker-compose.yaml',
@@ -35,8 +37,8 @@ $candidates = @(
 
 Write-Section 'Frontend deploy: validate remote Docker access'
 Write-Host "Repository root: $repoRoot"
-Write-Host "Remote Docker host: $dockerHost"
-docker -H $dockerHost version
+Write-Host "Remote Docker host: $env:DOCKER_HOST"
+docker version
 Close-Section
 
 Write-Section 'Frontend deploy: resolve compose file'
@@ -58,28 +60,29 @@ Write-Host "Using compose file: $composeRelative"
 Close-Section
 
 Write-Section 'Frontend deploy: validate compose configuration'
-docker -H $dockerHost compose -f $composeFullPath config --quiet
+docker compose -f $composeFullPath config --quiet
 Close-Section
 
 Write-Section 'Frontend deploy: stop current frontend stack'
 Write-Host 'Running docker compose down without -v so volumes are preserved.'
-docker -H $dockerHost compose -f $composeFullPath down
+docker compose -f $composeFullPath down
 Close-Section
 
 Write-Section 'Frontend deploy: build and start new frontend stack'
-docker -H $dockerHost compose -f $composeFullPath up -d --build
+docker compose -f $composeFullPath up -d --build
 Close-Section
 
 Write-Section 'Frontend deploy: current frontend stack state'
-docker -H $dockerHost compose -f $composeFullPath ps
+docker compose -f $composeFullPath ps
 Close-Section
 
 Add-Summary '# Frontend deployment'
 Add-Summary ''
-Add-Summary "- Remote Docker host: $dockerHost"
+Add-Summary "- Remote Docker host: $env:DOCKER_HOST"
 Add-Summary "- Compose file: $composeRelative"
 Add-Summary '- Lifecycle commands executed:'
-Add-Summary '  - docker -H tcp://192.168.88.130:2375 compose ... down'
-Add-Summary '  - docker -H tcp://192.168.88.130:2375 compose ... up -d --build'
+Add-Summary '  - docker compose ... down'
+Add-Summary '  - docker compose ... up -d --build'
 
 Write-Host '::notice::Frontend deployment completed successfully.'
+
